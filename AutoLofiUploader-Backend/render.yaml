@@ -3,10 +3,17 @@
 services:
   - type: web
     name: autolofi-backend
-    env: python
-    plan: free # Attention au temps de traitement vidéo sur le plan gratuit
+    # 'runtime' est la propriété correcte pour spécifier l'environnement d'exécution.
+    runtime: python
+    plan: free # Attention : le traitement vidéo peut être lent ou dépasser les limites du plan gratuit.
+    
+    # Commande pour installer les dépendances avant de démarrer le serveur.
     buildCommand: "pip install -r requirements.txt"
+    
+    # Commande pour démarrer le serveur web. Gunicorn est recommandé pour la production.
     startCommand: "gunicorn app:app"
+    
+    # Définition des variables d'environnement.
     envVars:
       - key: PYTHON_VERSION
-        value: 3.12.0
+        value: 3.12.0 # Spécifie la version de Python à utiliser.
