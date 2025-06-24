@@ -22,6 +22,7 @@ def start_suno_audio_generation(api_key: str, prompt: str, callback_url: str) ->
     payload = {
         "prompt": prompt,
         "instrumental": True,
+        "model": "V3_5",
         "callBackUrl": callback_url
     }
     
