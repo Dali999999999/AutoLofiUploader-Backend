@@ -1,16 +1,26 @@
-# app.py (version corrigée et robuste)
+# app.py (version asynchrone avec callback)
 
 from flask import Flask, request, jsonify
 import os
 import services
 import media
+import uuid
+import requests
 from google.auth.exceptions import RefreshError
 import gspread
 
 app = Flask(__name__)
 
+# --- Stockage temporaire en mémoire ---
+# Ce dictionnaire stockera les informations d'une tâche entre l'appel initial
+# et le callback de Suno. La clé est le task_id de Suno.
+TASK_STORE = {}
+
 @app.route('/run', methods=['POST'])
 def run_process():
+    """
+    Endpoint initial : lit le prompt, lance la génération audio et répond immédiatement.
+    """
     data = request.get_json()
     if not data:
         return jsonify({"error": "Requête JSON invalide ou vide."}), 400
@@ -19,82 +29,136 @@ def run_process():
     if not all(key in data for key in required_keys):
         return jsonify({"error": f"Paramètres manquants. Requis : {required_keys}"}), 400
 
-    access_token = data['access_token']
-    sheet_id = data['sheet_id']
-    prompt_id = data['prompt_id']
-    suno_key = data['suno_key']
-    image_key = data['image_key']
-    
-    temp_files = []
-
     try:
-        # 1. Lire les données du prompt depuis Google Sheet
+        # 1. Extraire les données de la requête
+        access_token = data['access_token']
+        sheet_id = data['sheet_id']
+        prompt_id = data['prompt_id']
+        suno_key = data['suno_key']
+        image_key = data['image_key']
+
+        # 2. Lire les données du prompt depuis Google Sheet
         print(f"📄 Lecture du prompt '{prompt_id}' depuis le Google Sheet '{sheet_id}'.")
         sheets_client = services.get_sheets_client(access_token)
         prompt_data = services.get_prompt_from_sheet(sheets_client, sheet_id, prompt_id)
 
-        # --- CORRECTION MAJEURE : MAPPING DE LA NOUVELLE STRUCTURE ---
-        # Ancienne structure (supposée) : ID, Prompt, Titre, Description, Tags
-        # Nouvelle structure (robuste) : ID, Music_Prompt, Image_Prompt, Video_Title, Video_Description, Tags
-        
-        # Vérification que la ligne a assez de colonnes pour éviter les erreurs
         if len(prompt_data) < 6:
-            raise IndexError(f"La ligne du prompt '{prompt_id}' ne contient pas assez de colonnes. Structure attendue : ID, Music_Prompt, Image_Prompt, Video_Title, Video_Description, Tags.")
+            raise IndexError("Structure de ligne incorrecte. 6 colonnes attendues (A-F).")
 
-        music_prompt = prompt_data[1]       # Colonne B: Prompt pour l'IA musicale
-        image_prompt = prompt_data[2]       # Colonne C: Prompt pour l'IA visuelle
-        video_title = prompt_data[3]        # Colonne D: Titre de la vidéo YouTube
-        video_description = prompt_data[4]  # Colonne E: Description de la vidéo
-        video_tags = [tag.strip() for tag in prompt_data[5].split(',')] # Colonne F: Tags
+        # 3. Préparer les informations pour la tâche
+        task_context = {
+            "prompt_id": prompt_id,
+            "sheet_id": sheet_id,
+            "access_token": access_token,
+            "image_key": image_key,
+            "music_prompt": prompt_data[1],
+            "image_prompt": prompt_data[2],
+            "video_title": prompt_data[3],
+            "video_description": prompt_data[4],
+            "video_tags": [tag.strip() for tag in prompt_data[5].split(',')]
+        }
 
-        print(f"   - Prompt Musique : '{music_prompt[:50]}...'")
-        print(f"   - Prompt Image : '{image_prompt[:50]}...'")
+        # 4. Construire l'URL du callback
+        # request.url_root donne la base de l'URL (ex: https://myapp.onrender.com/)
+        callback_url = request.url_root + "suno_callback"
+        print(f"   - URL de callback configurée : {callback_url}")
 
-        # 2. Générer l'audio et l'image avec les prompts dédiés
-        print("🎵 Génération de l'audio...")
-        audio_path = media.generate_audio_from_ia(suno_key, music_prompt)
-        temp_files.append(audio_path)
+        # 5. Lancer la génération audio asynchrone
+        task_id = media.start_suno_audio_generation(suno_key, task_context["music_prompt"], callback_url)
         
-        print("🎨 Génération de l'image...")
-        image_path = media.generate_image_from_ia(image_key, image_prompt)
+        # 6. Stocker le contexte de la tâche en mémoire
+        TASK_STORE[task_id] = task_context
+        print(f"   - Contexte de la tâche '{task_id}' stocké en mémoire.")
+
+        # 7. Répondre au client que la tâche a bien été lancée
+        return jsonify({
+            "success": True,
+            "status": "pending",
+            "message": "La génération de la vidéo a été lancée. Le serveur traitera la suite en arrière-plan.",
+            "task_id": task_id
+        }), 202  # 202 Accepted: indique que la requête est acceptée mais pas encore terminée.
+
+    except (RefreshError, gspread.exceptions.APIError) as e:
+        return jsonify({"error": "Token Google expiré ou invalide.", "details": str(e)}), 401
+    except (ValueError, IndexError, IOError) as e:
+        return jsonify({"error": "Erreur de données ou de configuration.", "details": str(e)}), 400
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": "Une erreur interne est survenue.", "details": str(e)}), 500
+
+
+@app.route('/suno_callback', methods=['POST'])
+def suno_callback():
+    """
+    Endpoint de callback appelé par Suno lorsque la génération audio est terminée.
+    """
+    print("\n🔔 Callback reçu de Suno !")
+    callback_data = request.get_json() or {}
+    temp_files = []
+
+    try:
+        # 1. Valider le callback
+        if callback_data.get("code") != 200 or not callback_data.get("data"):
+            raise ValueError(f"Callback Suno en erreur ou invalide : {callback_data.get('msg')}")
+
+        item = callback_data["data"]["data"][0]
+        task_id = item.get("task_id") or item.get("id")
+        audio_url = item.get("audio_url")
+
+        if not task_id or not audio_url:
+            raise ValueError("ID de tâche ou URL audio manquant dans le callback.")
+
+        # 2. Récupérer le contexte de la tâche depuis la mémoire
+        print(f"   - Récupération du contexte pour la tâche : {task_id}")
+        context = TASK_STORE.pop(task_id, None)
+        if not context:
+            raise ValueError(f"Tâche inconnue ou déjà traitée : {task_id}")
+
+        # --- Le reste du processus est déclenché ici ---
+        
+        # 3. Télécharger l'audio généré
+        print(f"   - Téléchargement de l'audio depuis : {audio_url}")
+        resp = requests.get(audio_url, timeout=60)
+        resp.raise_for_status()
+        audio_path = f"/tmp/{task_id}.mp3"
+        with open(audio_path, "wb") as f:
+            f.write(resp.content)
+        temp_files.append(audio_path)
+        print(f"   - Audio sauvegardé à : {audio_path}")
+
+        # 4. Générer l'image
+        image_path = media.generate_image_from_ia(context['image_key'], context['image_prompt'])
         temp_files.append(image_path)
         
-        # 3. Assembler la vidéo avec FFmpeg
-        print("🎬 Assemblage de la vidéo (image + audio)...")
+        # 5. Assembler la vidéo
         video_path = media.assemble_video(image_path, audio_path)
         temp_files.append(video_path)
 
-        # 4. Uploader sur YouTube
-        print("🚀 Upload de la vidéo sur YouTube...")
-        video_url = services.upload_to_youtube(access_token, video_path, video_title, video_description, video_tags)
+        # 6. Uploader sur YouTube
+        video_url = services.upload_to_youtube(
+            context['access_token'], video_path, context['video_title'],
+            context['video_description'], context['video_tags']
+        )
 
-        # 5. Mettre à jour le statut et l'URL dans Google Sheet
-        print("✍️ Mise à jour du Google Sheet...")
-        services.update_video_url_in_sheet(sheets_client, sheet_id, prompt_id, video_url)
+        # 7. Mettre à jour le Google Sheet
+        sheets_client = services.get_sheets_client(context['access_token'])
+        services.update_video_url_in_sheet(sheets_client, context['sheet_id'], context['prompt_id'], video_url)
         
-        print("✅ Processus complet terminé avec succès !")
-        return jsonify({
-            "success": True,
-            "message": "Processus complet terminé.",
-            "video_url": video_url
-        }), 200
+        print(f"✅ Processus complet terminé avec succès pour la tâche {task_id} !")
+        return jsonify({"status": "callback processed successfully"}), 200
 
-    except (RefreshError, gspread.exceptions.APIError) as e:
-        return jsonify({"error": "Token Google expiré ou invalide. Le client doit relancer l'authentification.", "details": str(e)}), 401
-    
-    except (ValueError, IndexError) as e:
-        # Erreur si un prompt n'est pas trouvé ou si la structure de la ligne est incorrecte
-        return jsonify({"error": "Erreur de données ou de configuration du Google Sheet.", "details": str(e)}), 400
-
+    except (ValueError, IndexError, IOError, requests.exceptions.RequestException) as e:
+        print(f"❌ Erreur lors du traitement du callback : {e}")
+        # Optionnel : Mettre à jour le sheet avec un statut "Erreur"
+        return jsonify({"error": "Erreur lors du traitement du callback.", "details": str(e)}), 400
     except Exception as e:
-        # Gérer toutes les autres erreurs (ex: FFmpeg, API IA, etc.)
         import traceback
-        traceback.print_exc() # Imprime la trace complète dans les logs de Render pour le débogage
-        return jsonify({"error": "Une erreur interne est survenue sur le serveur.", "details": str(e)}), 500
-
+        traceback.print_exc()
+        return jsonify({"error": "Erreur interne pendant le callback.", "details": str(e)}), 500
     finally:
-        # 6. Nettoyer les fichiers temporaires quoi qu'il arrive
-        print("🧹 Nettoyage des fichiers temporaires...")
+        # 8. Nettoyer les fichiers temporaires
+        print("🧹 Nettoyage des fichiers temporaires du callback...")
         for file_path in temp_files:
             if os.path.exists(file_path):
                 try:
@@ -103,20 +167,6 @@ def run_process():
                 except OSError as e:
                     print(f"  - Erreur lors de la suppression de {file_path}: {e}")
 
-# Note: Les autres endpoints restent inchangés car ils ne sont pas encore implémentés.
-@app.route('/prompts', methods=['GET'])
-def get_prompts():
-    return jsonify({"message": "Endpoint /prompts non implémenté."}), 501
-
-@app.route('/update_prompt', methods=['POST'])
-def update_prompt():
-    return jsonify({"message": "Endpoint /update_prompt non implémenté."}), 501
-    
-@app.route('/delete_prompt', methods=['POST'])
-def delete_prompt():
-    return jsonify({"message": "Endpoint /delete_prompt non implémenté."}), 501
-
 if __name__ == '__main__':
-    # Utilise le port défini par Render, avec une valeur par défaut de 8080 pour les tests locaux
     port = int(os.environ.get('PORT', 8080))
     app.run(debug=False, host='0.0.0.0', port=port)
