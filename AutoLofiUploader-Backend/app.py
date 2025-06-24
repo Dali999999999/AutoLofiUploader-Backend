@@ -88,10 +88,12 @@ def run_process():
         return jsonify({"error": "Une erreur interne est survenue.", "details": str(e)}), 500
 
 
+
+
 @app.route('/suno_callback', methods=['POST'])
 def suno_callback():
     """
-    Endpoint de callback appelé par Suno, maintenant plus robuste pour extraire les données.
+    Endpoint de callback final, adapté à la structure exacte de la réponse de l'API.
     """
     print("\n🔔 Callback reçu de Suno !")
     callback_data = request.get_json() or {}
@@ -99,37 +101,42 @@ def suno_callback():
     temp_files = []
 
     try:
-        # --- DÉBUT DE LA CORRECTION FINALE DU CALLBACK ---
+        # --- DÉBUT DE LA CORRECTION DÉFINITIVE ---
         
-        # 1. Valider la structure générale du callback
+        # 1. Valider la structure générale et extraire l'objet data principal
         if callback_data.get("code") != 200 or not isinstance(callback_data.get("data"), dict):
-            raise ValueError(f"Callback Suno en erreur ou structure de 'data' invalide.")
+            raise ValueError("Callback Suno en erreur ou structure de 'data' principale invalide.")
+        
+        main_data_obj = callback_data["data"]
 
-        # 2. Naviguer prudemment dans le dictionnaire
-        item_list = callback_data["data"].get("data")
+        # 2. Extraire le VRAI task_id depuis le bon emplacement
+        task_id = main_data_obj.get("task_id")
+        if not task_id:
+            raise ValueError("La clé 'task_id' est manquante dans l'objet 'data' du callback.")
+
+        # 3. Extraire la liste des pistes générées
+        item_list = main_data_obj.get("data")
         if not isinstance(item_list, list) or not item_list:
-            raise ValueError("La clé 'data.data' est manquante ou n'est pas une liste valide.")
+            raise ValueError("La clé 'data.data' (liste des pistes) est manquante ou n'est pas une liste valide.")
         
+        # 4. Prendre la première piste et trouver une URL audio valide
         item = item_list[0]
+        # On essaie "audio_url", et si c'est vide, on prend "stream_audio_url" comme solution de repli.
+        audio_url = item.get("audio_url") or item.get("stream_audio_url")
+
+        if not audio_url:
+            raise ValueError("Aucune URL audio valide ('audio_url' ou 'stream_audio_url') n'a été trouvée dans le premier objet du callback.")
+
+        # --- FIN DE LA CORRECTION DÉFINITIVE ---
+
+        print(f"   - Données extraites avec succès ! Tâche: {task_id}, URL: {audio_url}")
         
-        # 3. Extraire l'ID de la tâche et l'URL de l'audio
-        # L'ID de la tâche originale est dans "task_id", l'URL dans "audio_url"
-        task_id = item.get("task_id")
-        audio_url = item.get("audio_url")
-
-        if not task_id or not audio_url:
-            raise ValueError("Clés 'task_id' ou 'audio_url' manquantes dans le premier objet du callback.")
-
-        # --- FIN DE LA CORRECTION FINALE DU CALLBACK ---
-
+        # Le reste du processus continue normalement avec les bonnes données
         print(f"   - Récupération du contexte pour la tâche : {task_id}")
         context = TASK_STORE.pop(task_id, None)
         if not context:
             raise ValueError(f"Tâche inconnue ou déjà traitée : {task_id}")
 
-        # --- Le reste du processus est déclenché ici ---
-        
-        # 3. Télécharger l'audio généré
         print(f"   - Téléchargement de l'audio depuis : {audio_url}")
         resp = requests.get(audio_url, timeout=60)
         resp.raise_for_status()
@@ -139,21 +146,17 @@ def suno_callback():
         temp_files.append(audio_path)
         print(f"   - Audio sauvegardé à : {audio_path}")
 
-        # 4. Générer l'image
         image_path = media.generate_image_from_ia(context['image_key'], context['image_prompt'])
         temp_files.append(image_path)
         
-        # 5. Assembler la vidéo
         video_path = media.assemble_video(image_path, audio_path)
         temp_files.append(video_path)
 
-        # 6. Uploader sur YouTube
         video_url = services.upload_to_youtube(
             context['access_token'], video_path, context['video_title'],
             context['video_description'], context['video_tags']
         )
 
-        # 7. Mettre à jour le Google Sheet
         sheets_client = services.get_sheets_client(context['access_token'])
         services.update_video_url_in_sheet(sheets_client, context['sheet_id'], context['prompt_id'], video_url)
         
@@ -162,14 +165,12 @@ def suno_callback():
 
     except (ValueError, IndexError, IOError, requests.exceptions.RequestException) as e:
         print(f"❌ Erreur lors du traitement du callback : {e}")
-        # Optionnel : Mettre à jour le sheet avec un statut "Erreur"
         return jsonify({"error": "Erreur lors du traitement du callback.", "details": str(e)}), 400
     except Exception as e:
         import traceback
         traceback.print_exc()
         return jsonify({"error": "Erreur interne pendant le callback.", "details": str(e)}), 500
     finally:
-        # 8. Nettoyer les fichiers temporaires
         print("🧹 Nettoyage des fichiers temporaires du callback...")
         for file_path in temp_files:
             if os.path.exists(file_path):
