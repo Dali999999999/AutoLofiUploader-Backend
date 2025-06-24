@@ -13,9 +13,11 @@ HUGGING_FACE_API_URL = "https://api-inference.huggingface.co/models/black-forest
 
 # --- Fonctions de génération de média ---
 
+# Dans media.py
+
 def start_suno_audio_generation(api_key: str, prompt: str, callback_url: str) -> str:
     """
-    Lance une tâche de génération audio sur l'API Suno et retourne un ID de tâche.
+    Lance une tâche de génération audio sur l'API Suno de manière robuste.
     """
     print(f"🎵 Lancement de la tâche Suno pour le prompt : '{prompt[:70]}...'")
     headers = {"Authorization": f"Bearer {api_key}"}
@@ -30,29 +32,34 @@ def start_suno_audio_generation(api_key: str, prompt: str, callback_url: str) ->
     try:
         response = requests.post(SUNO_API_URL, headers=headers, json=payload, timeout=30)
         
-        # --- DÉBUT DE LA MODIFICATION ---
-        # On vérifie la réponse AVANT de essayer de lire le JSON
+        # --- DÉBUT DE LA MODIFICATION ROBUSTE ---
+        print(f"   - Réponse BRUTE de Suno reçue (Statut {response.status_code}): {response.text}")
+
         if response.status_code != 200:
-            print(f"❌ Erreur de l'API Suno ! Statut: {response.status_code}")
-            print(f"   Réponse brute de Suno: {response.text}")
             raise ValueError(f"Suno a répondu avec un code d'erreur {response.status_code}.")
         
         data = response.json()
-        tasks = data.get("data", [])
         
-        if not tasks or not tasks[0].get("id"):
-            print(f"❌ Réponse de Suno reçue mais structure invalide.")
-            print(f"   Réponse JSON de Suno: {data}")
-            raise ValueError("La réponse de l'API Suno ne contient pas d'ID de tâche valide.")
-        # --- FIN DE LA MODIFICATION ---
+        # Vérification robuste de la structure de la réponse
+        tasks = data.get("data")
+        if not isinstance(tasks, list) or not tasks:
+            raise ValueError(f"La clé 'data' de la réponse Suno n'est pas une liste valide ou est vide.")
+            
+        task_id = tasks[0].get("id")
+        if not task_id:
+            raise ValueError("Le premier élément de la liste 'data' ne contient pas de clé 'id'.")
+        # --- FIN DE LA MODIFICATION ROBUSTE ---
         
-        task_id = tasks[0]["id"]
         print(f"   - Tâche Suno démarrée avec succès. ID : {task_id}")
         return task_id
 
     except requests.exceptions.RequestException as e:
-        print(f"❌ Erreur lors de l'appel à l'API Suno : {e}")
+        print(f"❌ Erreur réseau lors de l'appel à Suno : {e}")
         raise IOError("Impossible de démarrer la génération audio sur Suno.") from e
+    except (ValueError, KeyError, IndexError) as e:
+        # On attrape toutes les erreurs de parsing pour donner un message clair
+        print(f"❌ Erreur lors du traitement de la réponse de Suno : {e}")
+        raise ValueError(f"Structure de réponse de Suno inattendue. Détails : {e}") from e
 
 def generate_image_from_ia(api_key: str, prompt_text: str) -> str:
     """
