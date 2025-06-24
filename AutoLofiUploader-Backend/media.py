@@ -16,7 +16,6 @@ HUGGING_FACE_API_URL = "https://api-inference.huggingface.co/models/black-forest
 def start_suno_audio_generation(api_key: str, prompt: str, callback_url: str) -> str:
     """
     Lance une tâche de génération audio sur l'API Suno et retourne un ID de tâche.
-    La génération est asynchrone et notifiera le serveur via le callback_url.
     """
     print(f"🎵 Lancement de la tâche Suno pour le prompt : '{prompt[:70]}...'")
     headers = {"Authorization": f"Bearer {api_key}"}
@@ -28,12 +27,22 @@ def start_suno_audio_generation(api_key: str, prompt: str, callback_url: str) ->
     
     try:
         response = requests.post(SUNO_API_URL, headers=headers, json=payload, timeout=30)
-        response.raise_for_status()  # Lève une exception pour les codes d'erreur HTTP (4xx ou 5xx)
+        
+        # --- DÉBUT DE LA MODIFICATION ---
+        # On vérifie la réponse AVANT de essayer de lire le JSON
+        if response.status_code != 200:
+            print(f"❌ Erreur de l'API Suno ! Statut: {response.status_code}")
+            print(f"   Réponse brute de Suno: {response.text}")
+            raise ValueError(f"Suno a répondu avec un code d'erreur {response.status_code}.")
         
         data = response.json()
         tasks = data.get("data", [])
+        
         if not tasks or not tasks[0].get("id"):
+            print(f"❌ Réponse de Suno reçue mais structure invalide.")
+            print(f"   Réponse JSON de Suno: {data}")
             raise ValueError("La réponse de l'API Suno ne contient pas d'ID de tâche valide.")
+        # --- FIN DE LA MODIFICATION ---
         
         task_id = tasks[0]["id"]
         print(f"   - Tâche Suno démarrée avec succès. ID : {task_id}")
