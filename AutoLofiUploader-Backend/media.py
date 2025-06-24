@@ -15,9 +15,12 @@ HUGGING_FACE_API_URL = "https://api-inference.huggingface.co/models/black-forest
 
 # Dans media.py
 
+# Dans media.py
+
 def start_suno_audio_generation(api_key: str, prompt: str, callback_url: str) -> str:
     """
-    Lance une tâche de génération audio sur l'API Suno de manière robuste.
+    Lance une tâche de génération audio sur l'API Suno de manière robuste, en utilisant
+    la structure de réponse découverte.
     """
     print(f"🎵 Lancement de la tâche Suno pour le prompt : '{prompt[:70]}...'")
     headers = {"Authorization": f"Bearer {api_key}"}
@@ -32,7 +35,6 @@ def start_suno_audio_generation(api_key: str, prompt: str, callback_url: str) ->
     try:
         response = requests.post(SUNO_API_URL, headers=headers, json=payload, timeout=30)
         
-        # --- DÉBUT DE LA MODIFICATION ROBUSTE ---
         print(f"   - Réponse BRUTE de Suno reçue (Statut {response.status_code}): {response.text}")
 
         if response.status_code != 200:
@@ -40,24 +42,27 @@ def start_suno_audio_generation(api_key: str, prompt: str, callback_url: str) ->
         
         data = response.json()
         
-        # Vérification robuste de la structure de la réponse
-        tasks = data.get("data")
-        if not isinstance(tasks, list) or not tasks:
-            raise ValueError(f"La clé 'data' de la réponse Suno n'est pas une liste valide ou est vide.")
-            
-        task_id = tasks[0].get("id")
-        if not task_id:
-            raise ValueError("Le premier élément de la liste 'data' ne contient pas de clé 'id'.")
-        # --- FIN DE LA MODIFICATION ROBUSTE ---
+        # --- DÉBUT DE LA CORRECTION FINALE ---
+        # Le chemin exact pour trouver l'ID est data -> data -> taskId
         
-        print(f"   - Tâche Suno démarrée avec succès. ID : {task_id}")
+        # 1. Vérifier que 'data' est bien un dictionnaire
+        task_data = data.get("data")
+        if not isinstance(task_data, dict):
+            raise ValueError("La clé 'data' de la réponse Suno n'est pas un dictionnaire valide.")
+        
+        # 2. Extraire 'taskId' de ce dictionnaire
+        task_id = task_data.get("taskId")
+        if not task_id:
+            raise ValueError("Le dictionnaire 'data' ne contient pas de clé 'taskId'.")
+        # --- FIN DE LA CORRECTION FINALE ---
+        
+        print(f"✅ Tâche Suno démarrée avec succès ! ID de la tâche : {task_id}")
         return task_id
 
     except requests.exceptions.RequestException as e:
         print(f"❌ Erreur réseau lors de l'appel à Suno : {e}")
         raise IOError("Impossible de démarrer la génération audio sur Suno.") from e
     except (ValueError, KeyError, IndexError) as e:
-        # On attrape toutes les erreurs de parsing pour donner un message clair
         print(f"❌ Erreur lors du traitement de la réponse de Suno : {e}")
         raise ValueError(f"Structure de réponse de Suno inattendue. Détails : {e}") from e
 
