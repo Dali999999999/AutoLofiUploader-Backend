@@ -91,25 +91,37 @@ def run_process():
 @app.route('/suno_callback', methods=['POST'])
 def suno_callback():
     """
-    Endpoint de callback appelé par Suno lorsque la génération audio est terminée.
+    Endpoint de callback appelé par Suno, maintenant plus robuste pour extraire les données.
     """
     print("\n🔔 Callback reçu de Suno !")
     callback_data = request.get_json() or {}
+    print(f"   - Corps COMPLET du callback reçu: {callback_data}")
     temp_files = []
 
     try:
-        # 1. Valider le callback
-        if callback_data.get("code") != 200 or not callback_data.get("data"):
-            raise ValueError(f"Callback Suno en erreur ou invalide : {callback_data.get('msg')}")
+        # --- DÉBUT DE LA CORRECTION FINALE DU CALLBACK ---
+        
+        # 1. Valider la structure générale du callback
+        if callback_data.get("code") != 200 or not isinstance(callback_data.get("data"), dict):
+            raise ValueError(f"Callback Suno en erreur ou structure de 'data' invalide.")
 
-        item = callback_data["data"]["data"][0]
-        task_id = item.get("task_id") or item.get("id")
+        # 2. Naviguer prudemment dans le dictionnaire
+        item_list = callback_data["data"].get("data")
+        if not isinstance(item_list, list) or not item_list:
+            raise ValueError("La clé 'data.data' est manquante ou n'est pas une liste valide.")
+        
+        item = item_list[0]
+        
+        # 3. Extraire l'ID de la tâche et l'URL de l'audio
+        # L'ID de la tâche originale est dans "task_id", l'URL dans "audio_url"
+        task_id = item.get("task_id")
         audio_url = item.get("audio_url")
 
         if not task_id or not audio_url:
-            raise ValueError("ID de tâche ou URL audio manquant dans le callback.")
+            raise ValueError("Clés 'task_id' ou 'audio_url' manquantes dans le premier objet du callback.")
 
-        # 2. Récupérer le contexte de la tâche depuis la mémoire
+        # --- FIN DE LA CORRECTION FINALE DU CALLBACK ---
+
         print(f"   - Récupération du contexte pour la tâche : {task_id}")
         context = TASK_STORE.pop(task_id, None)
         if not context:
