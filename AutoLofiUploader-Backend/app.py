@@ -134,6 +134,9 @@ def suno_callback():
 
 
 # --- ENDPOINT 3 : Statut et récupération des fichiers (Polling) ---
+# Dans app.py
+
+# --- ENDPOINT 3 : Statut et récupération des fichiers (Polling) ---
 @app.route('/status/<task_id>', methods=['GET'])
 def get_task_status(task_id):
     print(f"   - Requête de statut pour la tâche : {task_id}")
@@ -163,17 +166,21 @@ def get_task_status(task_id):
                 zipf.write(audio_path, arcname='audio.mp3')
                 zipf.write(image_path, arcname='image.jpg')
                 zipf.writestr('metadata.json', json.dumps(task["metadata"]))
-            
-            @g.after_request
-            def cleanup(response):
-                print(f"🧹 Nettoyage des fichiers pour la tâche {task_id}...")
-                if os.path.exists(zip_path): os.remove(zip_path)
-                if os.path.exists(audio_path): os.remove(audio_path)
-                if os.path.exists(image_path): os.remove(image_path)
-                TASK_STORE.pop(task_id, None)
-                return response
 
-            return send_file(zip_path, as_attachment=True, download_name='media_bundle.zip')
+            # On envoie le fichier au client
+            response = send_file(zip_path, as_attachment=True, download_name='media_bundle.zip')
+
+            # --- DÉBUT DE LA CORRECTION ---
+            # Une fois le fichier envoyé, on peut nettoyer les fichiers et la tâche.
+            # Pas besoin de décorateur complexe, on le fait juste après.
+            print(f"🧹 Nettoyage des fichiers pour la tâche {task_id}...")
+            if os.path.exists(zip_path): os.remove(zip_path)
+            if os.path.exists(audio_path): os.remove(audio_path)
+            if os.path.exists(image_path): os.remove(image_path)
+            TASK_STORE.pop(task_id, None)
+            
+            return response
+            # --- FIN DE LA CORRECTION ---
 
         except Exception as e:
             traceback.print_exc()
