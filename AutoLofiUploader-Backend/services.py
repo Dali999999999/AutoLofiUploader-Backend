@@ -16,6 +16,8 @@ def get_sheets_client(access_token: str):
 
 # Dans services.py
 
+# Dans services.py
+
 def get_prompt_from_sheet(client: gspread.Client, sheet_id: str, prompt_id: str):
     """
     Récupère une ligne de prompt par son ID de manière robuste, en garantissant
@@ -26,27 +28,29 @@ def get_prompt_from_sheet(client: gspread.Client, sheet_id: str, prompt_id: str)
     if not cell:
         raise ValueError(f"Prompt avec l'ID '{prompt_id}' non trouvé.")
     
-    # --- DÉBUT DE LA MODIFICATION ROBUSTE ---
-    # Au lieu de lire simplement la ligne (ce qui peut omettre les cellules vides),
-    # nous spécifions explicitement la plage de A à M pour cette ligne.
+    # --- DÉBUT DE LA CORRECTION ---
+    # La méthode correcte dans gspread pour lire une plage est simplement `get()`.
     row_number = cell.row
     range_to_get = f'A{row_number}:M{row_number}'
     
-    # values_get retourne une liste de listes, on prend le premier (et seul) élément.
-    values = sheet.values_get(range_to_get)['values']
-    if not values:
-         # Ce cas est peu probable si la ligne a été trouvée, mais c'est une sécurité.
-        return []
-
-    prompt_data = values[0]
+    # La méthode `get()` retourne une liste de listes.
+    # Ex: [['valeurA', 'valeurB', ...]]
+    values = sheet.get(range_to_get)
     
-    # S'assurer que la liste a bien 13 éléments, en ajoutant des chaînes vides si nécessaire.
-    # C'est la garantie ultime contre les cellules vides en fin de ligne.
+    if not values:
+        # Si la plage est complètement vide, on retourne une liste vide pour la sécurité.
+        prompt_data = []
+    else:
+        # On prend la première (et seule) ligne de la liste des résultats.
+        prompt_data = values[0]
+    
+    # On garde la logique pour s'assurer d'avoir toujours 13 éléments.
+    # C'est la garantie contre les cellules vides en fin de ligne.
     while len(prompt_data) < 13:
         prompt_data.append('')
         
     return prompt_data
-    # --- FIN DE LA MODIFICATION ROBUSTE ---
+    # --- FIN DE LA CORRECTION ---
 
 def update_video_url_in_sheet(client: gspread.Client, sheet_id: str, prompt_id: str, video_url: str):
     """Met à jour la ligne du prompt avec l'URL de la vidéo et le statut 'Publié'."""
