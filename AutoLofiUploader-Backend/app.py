@@ -16,23 +16,19 @@ import media
 
 app = Flask(__name__)
 
-# Le TASK_STORE contient l'état de chaque tâche en cours.
 TASK_STORE = {}
 
-# --- Helper pour le nettoyage après une requête ---
 @app.after_request
 def call_after_request_callbacks(response):
     for callback in getattr(g, 'after_request_callbacks', ()):
         response = callback(response)
     return response
 
-# --- ENDPOINT 1 : Lancement du processus ---
 @app.route('/run', methods=['POST'])
 def run_process():
     data = request.get_json()
     if not data:
         return jsonify({"error": "Requête JSON invalide"}), 400
-
     try:
         access_token = data['access_token']
         sheet_id = data['sheet_id']
@@ -44,15 +40,18 @@ def run_process():
         sheets_client = services.get_sheets_client(access_token)
         prompt_data = services.get_prompt_from_sheet(sheets_client, sheet_id, prompt_id)
 
-        if len(prompt_data) < 13:
-            raise IndexError("Structure de ligne incorrecte. 13 colonnes (A-M) sont attendues.")
+        # --- MODIFICATION : Attendre 14 colonnes ---
+        if len(prompt_data) < 14:
+            raise IndexError("Structure de ligne incorrecte. 14 colonnes (A-N) sont attendues.")
 
+        # --- MODIFICATION : Ajouter la visibilité au contexte ---
         task_context = {
             "prompt_id": prompt_id, "sheet_id": sheet_id, "access_token": access_token,
             "image_key": image_key, "lyrics_or_description": prompt_data[1], "image_prompt": prompt_data[2],
             "video_title": prompt_data[3], "video_description": prompt_data[4],
             "video_tags": [tag.strip() for tag in prompt_data[5].split(',')],
-            "mode": prompt_data[10].lower().strip(), "style": prompt_data[11], "song_title": prompt_data[12]
+            "mode": prompt_data[10].lower().strip(), "style": prompt_data[11], "song_title": prompt_data[12],
+            "visibility": prompt_data[13]  # Col N
         }
 
         callback_url = request.url_root + "suno_callback"
@@ -80,7 +79,6 @@ def run_process():
         return jsonify({"error": "Erreur interne sur le serveur", "details": str(e)}), 500
 
 
-# --- ENDPOINT 2 : Callback de Suno ---
 @app.route('/suno_callback', methods=['POST'])
 def suno_callback():
     print("\n🔔 Callback reçu de Suno !")
@@ -92,7 +90,6 @@ def suno_callback():
 
         if not task_id or task_id not in TASK_STORE:
             return jsonify({"status": "ignored, unknown or processed task"}), 200
-
         if main_data_obj.get("callbackType") != 'complete':
             print(f"   - Callback intermédiaire pour la tâche {task_id} ignoré.")
             return jsonify({"status": "intermediate callback ignored"}), 200
@@ -114,13 +111,15 @@ def suno_callback():
         print("   - Téléchargement de l'image...")
         image_path = media.download_image_from_ia(context['image_key'], context['image_prompt'])
 
+        # --- MODIFICATION : Ajouter la visibilité aux métadonnées ---
         TASK_STORE[task_id] = {
             "status": "ready_for_download",
             "files": {"audio": audio_path, "image": image_path},
             "metadata": {
                 "video_title": context["video_title"], "video_description": context["video_description"],
                 "video_tags": context["video_tags"], "access_token": context["access_token"],
-                "sheet_id": context["sheet_id"], "prompt_id": context["prompt_id"]
+                "sheet_id": context["sheet_id"], "prompt_id": context["prompt_id"],
+                "visibility": context["visibility"] # On ajoute la visibilité ici
             }
         }
         print(f"✅ Tâche '{task_id}' mise à jour au statut 'ready_for_download'.")
@@ -133,28 +132,19 @@ def suno_callback():
         return jsonify({"error": "Erreur lors du traitement du callback."}), 400
 
 
-# --- ENDPOINT 3 : Statut et récupération des fichiers (Polling) ---
-# Dans app.py
-
-# --- ENDPOINT 3 : Statut et récupération des fichiers (Polling) ---
 @app.route('/status/<task_id>', methods=['GET'])
 def get_task_status(task_id):
     print(f"   - Requête de statut pour la tâche : {task_id}")
     task = TASK_STORE.get(task_id)
 
-    if not task:
-        return jsonify({"status": "not_found"}), 404
+    if not task: return jsonify({"status": "not_found"}), 404
 
     status = task.get("status", "unknown")
-
-    if status == "pending":
-        return jsonify({"status": "pending"}), 202
-    
+    if status == "pending": return jsonify({"status": "pending"}), 202
     if status == "error":
         error_message = task.get("message", "Erreur inconnue.")
         TASK_STORE.pop(task_id, None)
         return jsonify({"status": "error", "message": error_message}), 500
-
     if status == "ready_for_download":
         print(f"   - La tâche {task_id} est prête. Création du ZIP...")
         try:
@@ -166,13 +156,9 @@ def get_task_status(task_id):
                 zipf.write(audio_path, arcname='audio.mp3')
                 zipf.write(image_path, arcname='image.jpg')
                 zipf.writestr('metadata.json', json.dumps(task["metadata"]))
-
-            # On envoie le fichier au client
+            
             response = send_file(zip_path, as_attachment=True, download_name='media_bundle.zip')
-
-            # --- DÉBUT DE LA CORRECTION ---
-            # Une fois le fichier envoyé, on peut nettoyer les fichiers et la tâche.
-            # Pas besoin de décorateur complexe, on le fait juste après.
+            
             print(f"🧹 Nettoyage des fichiers pour la tâche {task_id}...")
             if os.path.exists(zip_path): os.remove(zip_path)
             if os.path.exists(audio_path): os.remove(audio_path)
@@ -180,16 +166,12 @@ def get_task_status(task_id):
             TASK_STORE.pop(task_id, None)
             
             return response
-            # --- FIN DE LA CORRECTION ---
-
         except Exception as e:
             traceback.print_exc()
             return jsonify({"status": "error", "message": f"Erreur lors de la création du ZIP : {e}"}), 500
-
     return jsonify({"status": "unknown"}), 500
 
 
-# --- ENDPOINT 4 : Publication ---
 @app.route('/publish', methods=['POST'])
 def publish_video():
     temp_files = []
@@ -205,9 +187,11 @@ def publish_video():
         temp_files.append(video_path)
         print(f"📹 Vidéo reçue du client et sauvegardée à : {video_path}")
 
+        # --- MODIFICATION : Passer la visibilité à la fonction d'upload ---
         video_url = services.upload_to_youtube(
             metadata['access_token'], video_path,
-            metadata['video_title'], metadata['video_description'], metadata['video_tags']
+            metadata['video_title'], metadata['video_description'], metadata['video_tags'],
+            metadata.get('visibility', 'private') # On utilise .get() pour une sécurité en plus
         )
 
         sheets_client = services.get_sheets_client(metadata['access_token'])
