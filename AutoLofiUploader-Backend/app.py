@@ -1,4 +1,4 @@
-# app.py
+# app.py (version finale épurée)
 
 import os
 import uuid
@@ -15,7 +15,6 @@ import services
 import media
 
 app = Flask(__name__)
-
 TASK_STORE = {}
 
 @app.after_request
@@ -40,30 +39,20 @@ def run_process():
         sheets_client = services.get_sheets_client(access_token)
         prompt_data = services.get_prompt_from_sheet(sheets_client, sheet_id, prompt_id)
 
-        # --- MODIFICATION : Attendre 14 colonnes ---
-        if len(prompt_data) < 14:
-            raise IndexError("Structure de ligne incorrecte. 14 colonnes (A-N) sont attendues.")
+        if len(prompt_data) < 11:
+            raise IndexError("Structure de ligne incorrecte. 11 colonnes (A-K) sont attendues.")
 
-        # --- MODIFICATION : Ajouter la visibilité au contexte ---
         task_context = {
             "prompt_id": prompt_id, "sheet_id": sheet_id, "access_token": access_token,
-            "image_key": image_key, "lyrics_or_description": prompt_data[1], "image_prompt": prompt_data[2],
+            "image_key": image_key, "music_description": prompt_data[1], "image_prompt": prompt_data[2],
             "video_title": prompt_data[3], "video_description": prompt_data[4],
             "video_tags": [tag.strip() for tag in prompt_data[5].split(',')],
-            "mode": prompt_data[10].lower().strip(), "style": prompt_data[11], "song_title": prompt_data[12],
-            "visibility": prompt_data[13]  # Col N
+            "visibility": prompt_data[10] # Col K
         }
 
         callback_url = request.url_root + "suno_callback"
-
-        if task_context["mode"] == "simple":
-            task_id = media.start_suno_simple_generation(suno_key, task_context["lyrics_or_description"], callback_url)
-        elif task_context["mode"] == "custom":
-            if not task_context["style"] or not task_context["song_title"]:
-                raise ValueError("Pour le mode 'custom', les colonnes 'Style_Prompt' et 'Song_Title' sont obligatoires.")
-            task_id = media.start_suno_custom_generation(suno_key, task_context["lyrics_or_description"], task_context["style"], task_context["song_title"], callback_url)
-        else:
-            raise ValueError(f"Mode inconnu : '{task_context['mode']}'. Doit être 'simple' ou 'custom'.")
+        
+        task_id = media.start_suno_generation(suno_key, task_context["music_description"], callback_url)
         
         TASK_STORE[task_id] = {"status": "pending", "context": task_context}
         print(f"   - Tâche '{task_id}' initialisée avec le statut 'pending'.")
@@ -81,6 +70,7 @@ def run_process():
 
 @app.route('/suno_callback', methods=['POST'])
 def suno_callback():
+    # ... (cette fonction reste la même, mais je la recopie pour la clarté) ...
     print("\n🔔 Callback reçu de Suno !")
     callback_data = request.get_json() or {}
     task_id = None
@@ -89,7 +79,7 @@ def suno_callback():
         task_id = main_data_obj.get("task_id")
 
         if not task_id or task_id not in TASK_STORE:
-            return jsonify({"status": "ignored, unknown or processed task"}), 200
+            return jsonify({"status": "ignored, unknown task"}), 200
         if main_data_obj.get("callbackType") != 'complete':
             print(f"   - Callback intermédiaire pour la tâche {task_id} ignoré.")
             return jsonify({"status": "intermediate callback ignored"}), 200
@@ -99,8 +89,7 @@ def suno_callback():
 
         item = main_data_obj.get("data", [{}])[0]
         audio_url = item.get("audio_url") or item.get("stream_audio_url")
-        if not audio_url:
-            raise ValueError("URL audio manquante dans le callback final.")
+        if not audio_url: raise ValueError("URL audio manquante dans le callback.")
 
         print("   - Téléchargement de l'audio...")
         resp = requests.get(audio_url, timeout=180)
@@ -111,7 +100,6 @@ def suno_callback():
         print("   - Téléchargement de l'image...")
         image_path = media.download_image_from_ia(context['image_key'], context['image_prompt'])
 
-        # --- MODIFICATION : Ajouter la visibilité aux métadonnées ---
         TASK_STORE[task_id] = {
             "status": "ready_for_download",
             "files": {"audio": audio_path, "image": image_path},
@@ -119,26 +107,25 @@ def suno_callback():
                 "video_title": context["video_title"], "video_description": context["video_description"],
                 "video_tags": context["video_tags"], "access_token": context["access_token"],
                 "sheet_id": context["sheet_id"], "prompt_id": context["prompt_id"],
-                "visibility": context["visibility"] # On ajoute la visibilité ici
+                "visibility": context["visibility"]
             }
         }
         print(f"✅ Tâche '{task_id}' mise à jour au statut 'ready_for_download'.")
         return jsonify({"status": "callback processed successfully"}), 200
 
     except Exception as e:
-        if task_id and task_id in TASK_STORE:
-            TASK_STORE[task_id] = {"status": "error", "message": str(e)}
+        if task_id and task_id in TASK_STORE: TASK_STORE[task_id] = {"status": "error", "message": str(e)}
         traceback.print_exc()
         return jsonify({"error": "Erreur lors du traitement du callback."}), 400
 
 
 @app.route('/status/<task_id>', methods=['GET'])
 def get_task_status(task_id):
+    # ... (cette fonction reste la même, mais je la recopie pour la clarté) ...
     print(f"   - Requête de statut pour la tâche : {task_id}")
     task = TASK_STORE.get(task_id)
 
     if not task: return jsonify({"status": "not_found"}), 404
-
     status = task.get("status", "unknown")
     if status == "pending": return jsonify({"status": "pending"}), 202
     if status == "error":
@@ -174,10 +161,11 @@ def get_task_status(task_id):
 
 @app.route('/publish', methods=['POST'])
 def publish_video():
+    # ... (cette fonction reste la même, mais je la recopie pour la clarté) ...
     temp_files = []
     try:
         if 'video_file' not in request.files or 'metadata_str' not in request.form:
-            return jsonify({"error": "Requête invalide. 'video_file' et 'metadata_str' sont requis."}), 400
+            return jsonify({"error": "Requête invalide."}), 400
 
         video_file = request.files['video_file']
         metadata = json.loads(request.form['metadata_str'])
@@ -187,11 +175,10 @@ def publish_video():
         temp_files.append(video_path)
         print(f"📹 Vidéo reçue du client et sauvegardée à : {video_path}")
 
-        # --- MODIFICATION : Passer la visibilité à la fonction d'upload ---
         video_url = services.upload_to_youtube(
             metadata['access_token'], video_path,
             metadata['video_title'], metadata['video_description'], metadata['video_tags'],
-            metadata.get('visibility', 'private') # On utilise .get() pour une sécurité en plus
+            metadata.get('visibility', 'private')
         )
 
         sheets_client = services.get_sheets_client(metadata['access_token'])
