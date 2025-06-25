@@ -273,19 +273,29 @@ def v2_suno_callback():
         traceback.print_exc()
         return jsonify({"error": "Erreur lors du traitement du callback V2."}), 400
 
+# Dans app.py
+
 @app.route('/v2/get_audio/<task_id>', methods=['GET'])
 def v2_get_audio(task_id):
-    """V2 Endpoint de Polling: Le client appelle ici pour récupérer son fichier audio."""
+    """
+    V2 Endpoint de Polling: Le client appelle ici pour récupérer son fichier audio.
+    """
     print(f"   - [V2] Requête de statut/audio pour la tâche : {task_id}")
     task = TASK_STORE_V2.get(task_id)
 
-    if not task: return jsonify({"status": "not_found"}), 404
+    if not task:
+        return jsonify({"status": "not_found"}), 404
+
     status = task.get("status", "unknown")
-    if status == "pending": return jsonify({"status": "pending"}), 202
+
+    if status == "pending":
+        return jsonify({"status": "pending"}), 202
+    
     if status == "error":
         error_message = task.get("message", "Erreur inconnue.")
         TASK_STORE_V2.pop(task_id, None)
         return jsonify({"status": "error", "message": error_message}), 500
+
     if status == "ready":
         audio_path = task.get("audio_path")
         if not audio_path or not os.path.exists(audio_path):
@@ -293,17 +303,26 @@ def v2_get_audio(task_id):
 
         print(f"   - [V2] La tâche {task_id} est prête. Envoi du fichier audio.")
         
-        @g.after_request
-        def cleanup(response):
+        try:
+            # On prépare la réponse AVANT de faire le nettoyage
+            response = send_file(audio_path, as_attachment=True, download_name='generated_audio.mp3', mimetype='audio/mpeg')
+
+            # --- DÉBUT DE LA CORRECTION ---
+            # Le nettoyage se fait après la création de la réponse, mais avant de la retourner.
+            # Pas besoin de décorateur complexe.
             print(f"🧹 [V2] Nettoyage du fichier pour la tâche {task_id}...")
-            if os.path.exists(audio_path): os.remove(audio_path)
+            if os.path.exists(audio_path):
+                os.remove(audio_path)
             TASK_STORE_V2.pop(task_id, None)
-            return response
             
-        return send_file(audio_path, as_attachment=True, download_name='generated_audio.mp3', mimetype='audio/mpeg')
+            return response
+            # --- FIN DE LA CORRECTION ---
+
+        except Exception as e:
+            traceback.print_exc()
+            return jsonify({"status": "error", "message": f"Erreur lors de l'envoi du fichier : {e}"}), 500
 
     return jsonify({"status": "unknown"}), 500
-
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
