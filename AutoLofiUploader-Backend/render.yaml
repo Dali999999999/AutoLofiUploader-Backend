@@ -11,7 +11,7 @@ services:
     buildCommand: "pip install -r requirements.txt"
     
     # Commande pour démarrer le serveur web. Gunicorn est recommandé pour la production.
-    startCommand: "gunicorn app:app"
+    startCommand: "gunicorn --timeout 120 app:app"
     
     # Définition des variables d'environnement.
     envVars:
