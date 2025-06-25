@@ -1,129 +1,69 @@
-# media.py
+# media.py (version simplifiée pour la nouvelle architecture)
 
-import subprocess
 import os
 import uuid
 import requests
-from io import BytesIO
-from PIL import Image
 
 # --- Constantes pour les API ---
 SUNO_API_URL = "https://apibox.erweima.ai/api/v1/generate"
-HUGGING_FACE_API_URL = "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-dev"
+HUGGING_FACE_API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0" # Utilisation d'un modèle plus léger pour être sûr
 
-# --- Fonctions de génération de média ---
-
+# --- Fonctions de génération Suno (inchangées) ---
 
 def _call_suno_api(api_key: str, payload: dict) -> str:
-    """Fonction interne pour appeler l'API Suno et gérer la réponse."""
     print(f"🎵 Envoi de la requête à Suno avec le payload : {payload}")
     headers = {"Authorization": f"Bearer {api_key}"}
-    
     try:
         response = requests.post(SUNO_API_URL, headers=headers, json=payload, timeout=30)
         print(f"   - Réponse BRUTE de Suno reçue (Statut {response.status_code}): {response.text}")
-
         if response.status_code != 200:
             raise ValueError(f"Suno a répondu avec un code d'erreur HTTP {response.status_code}.")
-        
         data = response.json()
-        
         if data.get("code") != 200:
-             raise ValueError(f"Suno a renvoyé une erreur dans le corps de la réponse : {data.get('msg')}")
-
+             raise ValueError(f"Suno a renvoyé une erreur : {data.get('msg')}")
         task_data = data.get("data")
         if not isinstance(task_data, dict):
             raise ValueError("La clé 'data' de la réponse Suno n'est pas un dictionnaire valide.")
-        
         task_id = task_data.get("taskId")
         if not task_id:
             raise ValueError("Le dictionnaire 'data' ne contient pas de clé 'taskId'.")
-        
         print(f"✅ Tâche Suno démarrée avec succès ! ID : {task_id}")
         return task_id
-
     except requests.exceptions.RequestException as e:
         raise IOError(f"Erreur réseau lors de l'appel à Suno : {e}") from e
     except (ValueError, KeyError, IndexError) as e:
         raise ValueError(f"Structure de réponse de Suno inattendue. Détails : {e}") from e
 
 def start_suno_simple_generation(api_key: str, description: str, callback_url: str) -> str:
-    """
-    Mode SIMPLE : Génère une chanson complète (musique + voix) à partir d'une description.
-    """
     print("   - Lancement en mode SIMPLE (génération automatique).")
-    payload = {
-        "prompt": description,
-        "instrumental": False,
-        "customMode": False, # La clé du mode simple
-        "model": "V3_5",
-        "callBackUrl": callback_url
-    }
+    payload = {"prompt": description, "instrumental": False, "customMode": False, "model": "V3_5", "callBackUrl": callback_url}
     return _call_suno_api(api_key, payload)
 
 def start_suno_custom_generation(api_key: str, lyrics: str, style: str, title: str, callback_url: str) -> str:
-    """
-    Mode CUSTOM : Génère une chanson complète à partir de paroles, d'un style et d'un titre fournis.
-    """
     print("   - Lancement en mode CUSTOM (paroles fournies).")
-    payload = {
-        "prompt": lyrics,
-        "style": style,
-        "title": title,
-        "instrumental": False,
-        "customMode": True, # La clé du mode custom
-        "model": "V3_5",
-        "callBackUrl": callback_url
-    }
+    payload = {"prompt": lyrics, "style": style, "title": title, "instrumental": False, "customMode": True, "model": "V3_5", "callBackUrl": callback_url}
     return _call_suno_api(api_key, payload)
 
-# Dans media.py
 
-def generate_image_from_ia(api_key: str, prompt_text: str) -> str:
-    print(f"🎨 Génération de l'image via Hugging Face pour le prompt : '{prompt_text[:70]}...'")
+# --- NOUVELLE FONCTION DE TÉLÉCHARGEMENT D'IMAGE ---
+
+def download_image_from_ia(api_key: str, prompt_text: str) -> str:
+    """
+    Appelle l'API d'image et sauvegarde le résultat directement sur disque via streaming.
+    Ne fait AUCUN traitement d'image en mémoire.
+    """
+    print(f"🎨 Lancement de la génération d'image pour le prompt : '{prompt_text[:70]}...'")
     headers = {"Authorization": f"Bearer {api_key}"}
     payload = {"inputs": prompt_text}
     temp_image_path = f"/tmp/{uuid.uuid4()}.jpg"
     
     try:
-        # On ajoute stream=True pour ne pas tout charger en mémoire d'un coup
         with requests.post(HUGGING_FACE_API_URL, headers=headers, json=payload, timeout=120, stream=True) as response:
             response.raise_for_status()
-            
-            # On écrit la réponse sur le disque par petits morceaux
             with open(temp_image_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192): 
+                for chunk in response.iter_content(chunk_size=8192):
                     f.write(chunk)
-
-        print(f"🖼️ Image téléchargée en streaming à : {temp_image_path}")
-
-        # Maintenant qu'elle est sur le disque, on l'ouvre avec Pillow
-        # Cela consomme toujours de la mémoire, mais on évite le pic initial de requests.
-        img = Image.open(temp_image_path)
-        img_resized = img.resize((1280, 720), Image.LANCZOS)
-        img_resized.save(temp_image_path, format="JPEG", quality=95)
-        
-        print(f"✅ Image redimensionnée et sauvegardée à : {temp_image_path}")
+        print(f"🖼️ Image téléchargée avec succès à : {temp_image_path}")
         return temp_image_path
-        
     except requests.exceptions.RequestException as e:
-        raise IOError(f"La génération de l'image a échoué. Détails: {e}") from e
-
-def assemble_video(image_path: str, audio_path: str) -> str:
-    """Assemble une image et un audio en une vidéo MP4 en utilisant FFmpeg."""
-    output_path = f"/tmp/{uuid.uuid4()}.mp4"
-    print(f"🎬 Début de l'assemblage vidéo -> {output_path}")
-
-    command = [
-        'ffmpeg', '-loop', '1', '-i', image_path, '-i', audio_path,
-        '-c:v', 'libx264', '-tune', 'stillimage', '-c:a', 'aac', '-b:a', '192k',
-        '-pix_fmt', 'yuv420p', '-shortest', output_path
-    ]
-
-    try:
-        result = subprocess.run(command, check=True, capture_output=True, text=True)
-        print("✅ Vidéo assemblée avec succès.")
-        return output_path
-    except subprocess.CalledProcessError as e:
-        print(f"❌ Erreur FFmpeg : {e.stderr}")
-        raise IOError("La création de la vidéo avec FFmpeg a échoué.") from e
+        raise IOError(f"Le téléchargement de l'image a échoué. Détails: {e}") from e
