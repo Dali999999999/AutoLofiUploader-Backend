@@ -112,54 +112,45 @@ def run_process():
 
 
 @app.route('/suno_callback', methods=['POST'])
+# app.py - FONCTION CALLBACK COMPLÈTE À REMPLACER
+
+@app.route('/suno_callback', methods=['POST'])
 def suno_callback():
-    """
-    Endpoint de callback final, adapté à la structure exacte de la réponse de l'API.
-    """
     print("\n🔔 Callback reçu de Suno !")
     callback_data = request.get_json() or {}
     print(f"   - Corps COMPLET du callback reçu: {callback_data}")
     temp_files = []
 
     try:
-        # --- DÉBUT DE LA CORRECTION DÉFINITIVE ---
+        main_data_obj = callback_data.get("data", {})
         
-        # 1. Valider la structure générale et extraire l'objet data principal
-        if callback_data.get("code") != 200 or not isinstance(callback_data.get("data"), dict):
-            raise ValueError("Callback Suno en erreur ou structure de 'data' principale invalide.")
-        
-        main_data_obj = callback_data["data"]
+        # FILTRE CRUCIAL : On n'agit que sur le callback final.
+        if main_data_obj.get("callbackType") != 'complete':
+            print("   - Callback intermédiaire ignoré. En attente du message 'complete'.")
+            return jsonify({"status": "intermediate callback ignored"}), 200
 
-        # 2. Extraire le VRAI task_id depuis le bon emplacement
+        # --- Le reste de la logique ne s'exécute que pour le VRAI callback ---
         task_id = main_data_obj.get("task_id")
         if not task_id:
             raise ValueError("La clé 'task_id' est manquante dans l'objet 'data' du callback.")
 
-        # 3. Extraire la liste des pistes générées
         item_list = main_data_obj.get("data")
         if not isinstance(item_list, list) or not item_list:
             raise ValueError("La clé 'data.data' (liste des pistes) est manquante ou n'est pas une liste valide.")
         
-        # 4. Prendre la première piste et trouver une URL audio valide
         item = item_list[0]
-        # On essaie "audio_url", et si c'est vide, on prend "stream_audio_url" comme solution de repli.
         audio_url = item.get("audio_url") or item.get("stream_audio_url")
-
         if not audio_url:
-            raise ValueError("Aucune URL audio valide ('audio_url' ou 'stream_audio_url') n'a été trouvée dans le premier objet du callback.")
-
-        # --- FIN DE LA CORRECTION DÉFINITIVE ---
+            raise ValueError("Aucune URL audio valide ('audio_url' ou 'stream_audio_url') n'a été trouvée.")
 
         print(f"   - Données extraites avec succès ! Tâche: {task_id}, URL: {audio_url}")
         
-        # Le reste du processus continue normalement avec les bonnes données
-        print(f"   - Récupération du contexte pour la tâche : {task_id}")
         context = TASK_STORE.pop(task_id, None)
         if not context:
             raise ValueError(f"Tâche inconnue ou déjà traitée : {task_id}")
 
         print(f"   - Téléchargement de l'audio depuis : {audio_url}")
-        resp = requests.get(audio_url, timeout=60)
+        resp = requests.get(audio_url, timeout=180) # Augmentation du timeout pour le téléchargement
         resp.raise_for_status()
         audio_path = f"/tmp/{task_id}.mp3"
         with open(audio_path, "wb") as f:
