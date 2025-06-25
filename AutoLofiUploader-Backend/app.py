@@ -16,10 +16,12 @@ app = Flask(__name__)
 # et le callback de Suno. La clé est le task_id de Suno.
 TASK_STORE = {}
 
+# Dans app.py, remplacez la fonction run_process
+
 @app.route('/run', methods=['POST'])
 def run_process():
     """
-    Endpoint initial : lit le prompt, lance la génération audio et répond immédiatement.
+    Endpoint initial : lit le prompt, détermine le mode (simple/custom) et lance la génération.
     """
     data = request.get_json()
     if not data:
@@ -42,50 +44,69 @@ def run_process():
         sheets_client = services.get_sheets_client(access_token)
         prompt_data = services.get_prompt_from_sheet(sheets_client, sheet_id, prompt_id)
 
-        if len(prompt_data) < 6:
-            raise IndexError("Structure de ligne incorrecte. 6 colonnes attendues (A-F).")
+        # La nouvelle structure a 13 colonnes (A à M)
+        if len(prompt_data) < 13:
+            raise IndexError("Structure de ligne incorrecte. 13 colonnes (A-M) sont attendues.")
 
-        # 3. Préparer les informations pour la tâche
+        # 3. Mapper les données aux variables
         task_context = {
             "prompt_id": prompt_id,
             "sheet_id": sheet_id,
             "access_token": access_token,
             "image_key": image_key,
-            "music_prompt": prompt_data[1],
-            "image_prompt": prompt_data[2],
-            "video_title": prompt_data[3],
-            "video_description": prompt_data[4],
-            "video_tags": [tag.strip() for tag in prompt_data[5].split(',')]
+            "lyrics_or_description": prompt_data[1],  # Col B
+            "image_prompt": prompt_data[2],           # Col C
+            "video_title": prompt_data[3],            # Col D
+            "video_description": prompt_data[4],      # Col E
+            "video_tags": [tag.strip() for tag in prompt_data[5].split(',')], # Col F
+            "mode": prompt_data[10].lower().strip(),  # Col K
+            "style": prompt_data[11],                 # Col L
+            "song_title": prompt_data[12]             # Col M
         }
 
         # 4. Construire l'URL du callback
-        # request.url_root donne la base de l'URL (ex: https://myapp.onrender.com/)
         callback_url = request.url_root + "suno_callback"
-        print(f"   - URL de callback configurée : {callback_url}")
 
-        # 5. Lancer la génération audio asynchrone
-        task_id = media.start_suno_audio_generation(suno_key, task_context["music_prompt"], callback_url)
+        # 5. Appeler la bonne fonction en fonction du mode
+        if task_context["mode"] == "simple":
+            task_id = media.start_suno_simple_generation(
+                suno_key,
+                task_context["lyrics_or_description"],
+                callback_url
+            )
+        elif task_context["mode"] == "custom":
+            # Vérifier que les champs requis pour le mode custom ne sont pas vides
+            if not task_context["style"] or not task_context["song_title"]:
+                raise ValueError("Pour le mode 'custom', les colonnes 'Style_Prompt' et 'Song_Title' sont obligatoires.")
+            task_id = media.start_suno_custom_generation(
+                suno_key,
+                task_context["lyrics_or_description"],
+                task_context["style"],
+                task_context["song_title"],
+                callback_url
+            )
+        else:
+            raise ValueError(f"Mode inconnu : '{task_context['mode']}'. Doit être 'simple' ou 'custom'.")
         
-        # 6. Stocker le contexte de la tâche en mémoire
+        # 6. Stocker le contexte et répondre au client
         TASK_STORE[task_id] = task_context
         print(f"   - Contexte de la tâche '{task_id}' stocké en mémoire.")
-
-        # 7. Répondre au client que la tâche a bien été lancée
+        
         return jsonify({
             "success": True,
             "status": "pending",
-            "message": "La génération de la vidéo a été lancée. Le serveur traitera la suite en arrière-plan.",
+            "message": "La génération de la vidéo a été lancée.",
             "task_id": task_id
-        }), 202  # 202 Accepted: indique que la requête est acceptée mais pas encore terminée.
+        }), 202
 
     except (RefreshError, gspread.exceptions.APIError) as e:
         return jsonify({"error": "Token Google expiré ou invalide.", "details": str(e)}), 401
     except (ValueError, IndexError, IOError) as e:
-        return jsonify({"error": "Erreur de données ou de configuration.", "details": str(e)}), 400
+        return jsonify({"error": "Erreur de données, de configuration ou de l'API Suno.", "details": str(e)}), 400
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({"error": "Une erreur interne est survenue.", "details": str(e)}), 500
+        return jsonify({"error": "Une erreur interne imprévue est survenue.", "details": str(e)}), 500
 
 
 
