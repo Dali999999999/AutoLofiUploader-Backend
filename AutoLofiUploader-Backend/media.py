@@ -6,7 +6,7 @@ import requests
 
 # --- Constantes pour les API ---
 SUNO_API_URL = "https://apibox.erweima.ai/api/v1/generate"
-HUGGING_FACE_API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
+HUGGING_FACE_API_URL = "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-dev"
 
 def _call_suno_api(api_key: str, payload: dict) -> str:
     """Fonction interne pour appeler l'API Suno et gérer la réponse."""
