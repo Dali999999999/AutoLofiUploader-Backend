@@ -77,34 +77,37 @@ def start_suno_custom_generation(api_key: str, lyrics: str, style: str, title: s
     }
     return _call_suno_api(api_key, payload)
 
+# Dans media.py
+
 def generate_image_from_ia(api_key: str, prompt_text: str) -> str:
-    """
-    Génère une image via l'API Hugging Face, la redimensionne et la sauvegarde.
-    """
     print(f"🎨 Génération de l'image via Hugging Face pour le prompt : '{prompt_text[:70]}...'")
     headers = {"Authorization": f"Bearer {api_key}"}
     payload = {"inputs": prompt_text}
-    
     temp_image_path = f"/tmp/{uuid.uuid4()}.jpg"
-
+    
     try:
-        response = requests.post(HUGGING_FACE_API_URL, headers=headers, json=payload, timeout=120)
-        response.raise_for_status()
+        # On ajoute stream=True pour ne pas tout charger en mémoire d'un coup
+        with requests.post(HUGGING_FACE_API_URL, headers=headers, json=payload, timeout=120, stream=True) as response:
+            response.raise_for_status()
+            
+            # On écrit la réponse sur le disque par petits morceaux
+            with open(temp_image_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192): 
+                    f.write(chunk)
 
-        if not response.headers.get("content-type", "").startswith("image/"):
-            raise ValueError(f"La réponse de l'API d'image n'est pas une image. Réponse : {response.text[:200]}")
+        print(f"🖼️ Image téléchargée en streaming à : {temp_image_path}")
 
-        # Ouvrir, redimensionner et sauvegarder l'image
-        img = Image.open(BytesIO(response.content))
+        # Maintenant qu'elle est sur le disque, on l'ouvre avec Pillow
+        # Cela consomme toujours de la mémoire, mais on évite le pic initial de requests.
+        img = Image.open(temp_image_path)
         img_resized = img.resize((1280, 720), Image.LANCZOS)
         img_resized.save(temp_image_path, format="JPEG", quality=95)
         
-        print(f"🖼️ Image générée et sauvegardée à : {temp_image_path}")
+        print(f"✅ Image redimensionnée et sauvegardée à : {temp_image_path}")
         return temp_image_path
-
+        
     except requests.exceptions.RequestException as e:
-        print(f"❌ Erreur lors de l'appel à l'API d'image : {e}")
-        raise IOError("La génération de l'image a échoué.") from e
+        raise IOError(f"La génération de l'image a échoué. Détails: {e}") from e
 
 def assemble_video(image_path: str, audio_path: str) -> str:
     """Assemble une image et un audio en une vidéo MP4 en utilisant FFmpeg."""
