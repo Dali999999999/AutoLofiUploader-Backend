@@ -14,12 +14,39 @@ def get_sheets_client(access_token: str):
     creds = Credentials(token=access_token)
     return gspread.Client(auth=creds)
 
+# Dans services.py
+
 def get_prompt_from_sheet(client: gspread.Client, sheet_id: str, prompt_id: str):
+    """
+    Récupère une ligne de prompt par son ID de manière robuste, en garantissant
+    que 13 colonnes sont toujours retournées, même si elles sont vides.
+    """
     sheet = client.open_by_key(sheet_id).sheet1
     cell = sheet.find(prompt_id, in_column=1)
     if not cell:
         raise ValueError(f"Prompt avec l'ID '{prompt_id}' non trouvé.")
-    return sheet.row_values(cell.row)
+    
+    # --- DÉBUT DE LA MODIFICATION ROBUSTE ---
+    # Au lieu de lire simplement la ligne (ce qui peut omettre les cellules vides),
+    # nous spécifions explicitement la plage de A à M pour cette ligne.
+    row_number = cell.row
+    range_to_get = f'A{row_number}:M{row_number}'
+    
+    # values_get retourne une liste de listes, on prend le premier (et seul) élément.
+    values = sheet.values_get(range_to_get)['values']
+    if not values:
+         # Ce cas est peu probable si la ligne a été trouvée, mais c'est une sécurité.
+        return []
+
+    prompt_data = values[0]
+    
+    # S'assurer que la liste a bien 13 éléments, en ajoutant des chaînes vides si nécessaire.
+    # C'est la garantie ultime contre les cellules vides en fin de ligne.
+    while len(prompt_data) < 13:
+        prompt_data.append('')
+        
+    return prompt_data
+    # --- FIN DE LA MODIFICATION ROBUSTE ---
 
 def update_video_url_in_sheet(client: gspread.Client, sheet_id: str, prompt_id: str, video_url: str):
     """Met à jour la ligne du prompt avec l'URL de la vidéo et le statut 'Publié'."""
