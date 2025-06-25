@@ -13,58 +13,69 @@ HUGGING_FACE_API_URL = "https://api-inference.huggingface.co/models/black-forest
 
 # --- Fonctions de génération de média ---
 
-# Dans media.py
 
-# Dans media.py
-
-def start_suno_audio_generation(api_key: str, prompt: str, callback_url: str) -> str:
-    """
-    Lance une tâche de génération audio sur l'API Suno de manière robuste, en utilisant
-    la structure de réponse découverte.
-    """
-    print(f"🎵 Lancement de la tâche Suno pour le prompt : '{prompt[:70]}...'")
+def _call_suno_api(api_key: str, payload: dict) -> str:
+    """Fonction interne pour appeler l'API Suno et gérer la réponse."""
+    print(f"🎵 Envoi de la requête à Suno avec le payload : {payload}")
     headers = {"Authorization": f"Bearer {api_key}"}
-    payload = {
-        "prompt": prompt,
-        "instrumental": True,
-        "customMode": False,
-        "model": "V3_5",
-        "callBackUrl": callback_url
-    }
     
     try:
         response = requests.post(SUNO_API_URL, headers=headers, json=payload, timeout=30)
-        
         print(f"   - Réponse BRUTE de Suno reçue (Statut {response.status_code}): {response.text}")
 
         if response.status_code != 200:
-            raise ValueError(f"Suno a répondu avec un code d'erreur {response.status_code}.")
+            raise ValueError(f"Suno a répondu avec un code d'erreur HTTP {response.status_code}.")
         
         data = response.json()
         
-        # --- DÉBUT DE LA CORRECTION FINALE ---
-        # Le chemin exact pour trouver l'ID est data -> data -> taskId
-        
-        # 1. Vérifier que 'data' est bien un dictionnaire
+        if data.get("code") != 200:
+             raise ValueError(f"Suno a renvoyé une erreur dans le corps de la réponse : {data.get('msg')}")
+
         task_data = data.get("data")
         if not isinstance(task_data, dict):
             raise ValueError("La clé 'data' de la réponse Suno n'est pas un dictionnaire valide.")
         
-        # 2. Extraire 'taskId' de ce dictionnaire
         task_id = task_data.get("taskId")
         if not task_id:
             raise ValueError("Le dictionnaire 'data' ne contient pas de clé 'taskId'.")
-        # --- FIN DE LA CORRECTION FINALE ---
         
-        print(f"✅ Tâche Suno démarrée avec succès ! ID de la tâche : {task_id}")
+        print(f"✅ Tâche Suno démarrée avec succès ! ID : {task_id}")
         return task_id
 
     except requests.exceptions.RequestException as e:
-        print(f"❌ Erreur réseau lors de l'appel à Suno : {e}")
-        raise IOError("Impossible de démarrer la génération audio sur Suno.") from e
+        raise IOError(f"Erreur réseau lors de l'appel à Suno : {e}") from e
     except (ValueError, KeyError, IndexError) as e:
-        print(f"❌ Erreur lors du traitement de la réponse de Suno : {e}")
         raise ValueError(f"Structure de réponse de Suno inattendue. Détails : {e}") from e
+
+def start_suno_simple_generation(api_key: str, description: str, callback_url: str) -> str:
+    """
+    Mode SIMPLE : Génère une chanson complète (musique + voix) à partir d'une description.
+    """
+    print("   - Lancement en mode SIMPLE (génération automatique).")
+    payload = {
+        "prompt": description,
+        "instrumental": False,
+        "customMode": False, # La clé du mode simple
+        "model": "V3_5",
+        "callBackUrl": callback_url
+    }
+    return _call_suno_api(api_key, payload)
+
+def start_suno_custom_generation(api_key: str, lyrics: str, style: str, title: str, callback_url: str) -> str:
+    """
+    Mode CUSTOM : Génère une chanson complète à partir de paroles, d'un style et d'un titre fournis.
+    """
+    print("   - Lancement en mode CUSTOM (paroles fournies).")
+    payload = {
+        "prompt": lyrics,
+        "style": style,
+        "title": title,
+        "instrumental": False,
+        "customMode": True, # La clé du mode custom
+        "model": "V3_5",
+        "callBackUrl": callback_url
+    }
+    return _call_suno_api(api_key, payload)
 
 def generate_image_from_ia(api_key: str, prompt_text: str) -> str:
     """
