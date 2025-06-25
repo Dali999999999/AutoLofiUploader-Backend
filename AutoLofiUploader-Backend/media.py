@@ -1,4 +1,4 @@
-# media.py (version simplifiée pour la nouvelle architecture)
+# media.py (version finale épurée)
 
 import os
 import uuid
@@ -6,11 +6,10 @@ import requests
 
 # --- Constantes pour les API ---
 SUNO_API_URL = "https://apibox.erweima.ai/api/v1/generate"
-HUGGING_FACE_API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0" # Utilisation d'un modèle plus léger pour être sûr
-
-# --- Fonctions de génération Suno (inchangées) ---
+HUGGING_FACE_API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
 
 def _call_suno_api(api_key: str, payload: dict) -> str:
+    """Fonction interne pour appeler l'API Suno et gérer la réponse."""
     print(f"🎵 Envoi de la requête à Suno avec le payload : {payload}")
     headers = {"Authorization": f"Bearer {api_key}"}
     try:
@@ -34,29 +33,28 @@ def _call_suno_api(api_key: str, payload: dict) -> str:
     except (ValueError, KeyError, IndexError) as e:
         raise ValueError(f"Structure de réponse de Suno inattendue. Détails : {e}") from e
 
-def start_suno_simple_generation(api_key: str, description: str, callback_url: str) -> str:
-    print("   - Lancement en mode SIMPLE (génération automatique).")
-    payload = {"prompt": description, "instrumental": False, "customMode": False, "model": "V3_5", "callBackUrl": callback_url}
+def start_suno_generation(api_key: str, description: str, callback_url: str) -> str:
+    """
+    Génère une chanson complète (musique + voix) à partir d'une description.
+    """
+    print("   - Lancement de la génération de musique automatique.")
+    payload = {
+        "prompt": description,
+        "instrumental": False,
+        "customMode": False,
+        "model": "V3_5",
+        "callBackUrl": callback_url
+    }
     return _call_suno_api(api_key, payload)
-
-def start_suno_custom_generation(api_key: str, lyrics: str, style: str, title: str, callback_url: str) -> str:
-    print("   - Lancement en mode CUSTOM (paroles fournies).")
-    payload = {"prompt": lyrics, "style": style, "title": title, "instrumental": False, "customMode": True, "model": "V3_5", "callBackUrl": callback_url}
-    return _call_suno_api(api_key, payload)
-
-
-# --- NOUVELLE FONCTION DE TÉLÉCHARGEMENT D'IMAGE ---
 
 def download_image_from_ia(api_key: str, prompt_text: str) -> str:
     """
-    Appelle l'API d'image et sauvegarde le résultat directement sur disque via streaming.
-    Ne fait AUCUN traitement d'image en mémoire.
+    Appelle l'API d'image et sauvegarde le résultat directement sur disque.
     """
     print(f"🎨 Lancement de la génération d'image pour le prompt : '{prompt_text[:70]}...'")
     headers = {"Authorization": f"Bearer {api_key}"}
     payload = {"inputs": prompt_text}
     temp_image_path = f"/tmp/{uuid.uuid4()}.jpg"
-    
     try:
         with requests.post(HUGGING_FACE_API_URL, headers=headers, json=payload, timeout=120, stream=True) as response:
             response.raise_for_status()
